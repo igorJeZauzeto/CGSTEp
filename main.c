@@ -5,11 +5,15 @@
 
 typedef struct { int step, sa, na; } Potez;
 
-static int *tabla = NULL;
-static int n = 0;
+static int n;
+static int *tabla;
+static int *pos_of;
 
-static Potez *istorija = NULL;
-static int max_poteza = 0;
+static Potez *istorija;
+static int hist_cap;
+
+static int *targets;
+static int targets_len;
 
 static inline int m(int p) { return p + n + 1; }
 
@@ -20,7 +24,7 @@ static inline int valid_pos(int p) {
     return 0;
 }
 
-static void prikazi_stanje() {
+static void prikazi_stanje(void) {
     printf("L: ");
     for (int i = -1; i >= -n; i--) printf("[%d]", tabla[m(i)]);
     printf(" | G:%d D:%d | R: ", tabla[m(-(n+1))], tabla[m(n+1)]);
@@ -28,18 +32,21 @@ static void prikazi_stanje() {
     printf("\n");
 }
 
-static inline int cilj_postignut() {
-    for (int i = 1; i <= n; i++) if (tabla[m(i)] == 0) return 0;
+static inline int cilj_postignut(void) {
+    for (int i = 1; i <= n; i++) {
+        int p = pos_of[i];
+        if (!(p >= 1 && p <= n)) return 0;
+    }
     return 1;
 }
 
 static inline int moze_stati(int s, int p) {
     if (p > n || p < -n) return 1;
-    int a = p < 0 ? -p : p;
+    int a = (p < 0) ? -p : p;
     return a >= s;
 }
 
-static uint64_t hash_stanja() {
+static uint64_t hash_stanja(void) {
     uint64_t h = 1469598103934665603ULL;
     int len = 2 * n + 3;
     for (int i = 0; i < len; i++) {
@@ -157,10 +164,7 @@ static int hs_has_or_add(HashSet *hs, uint64_t h) {
 
 static HashSet visited;
 
-static int *targets = NULL;
-static int targets_len = 0;
-
-static void build_targets() {
+static void build_targets(void) {
     targets_len = 2 * n + 2;
     targets = (int*)malloc(sizeof(int) * (size_t)targets_len);
     if (!targets) { fprintf(stderr, "OOM\n"); exit(1); }
@@ -173,31 +177,36 @@ static void build_targets() {
     targets_len = t;
 }
 
-static int find_pos_of(int s) {
-    for (int k = -(n + 1); k <= (n + 1); k++) {
-        if (k != 0 && tabla[m(k)] == s) return k;
-    }
-    return 0;
+static void apply_move(int s, int sa, int na) {
+    tabla[m(sa)] = 0;
+    tabla[m(na)] = s;
+    pos_of[s] = na;
+}
+
+static void undo_move(int s, int sa, int na) {
+    tabla[m(na)] = 0;
+    tabla[m(sa)] = s;
+    pos_of[s] = sa;
 }
 
 typedef struct {
-    int s;        // trenutna ploca koju probamo na ovom nivou
-    int ti;       // index sljedeceg cilja u targets[]
-    int entered;  // 0 ako smo tek usli na ovaj nivo (treba visited), 1 ako nastavljamo
+    int s;
+    int ti;
+    int entered;
 } Frame;
 
-static int solve_iterative(void) {
-    Frame *stack = (Frame*)calloc((size_t)max_poteza, sizeof(Frame));
+static int solve_fast_any(void) {
+    Frame *stack = (Frame*)calloc((size_t)hist_cap, sizeof(Frame));
     if (!stack) { fprintf(stderr, "OOM\n"); exit(1); }
 
-    memset(istorija, 0, sizeof(Potez) * (size_t)max_poteza);
+    memset(istorija, 0, sizeof(Potez) * (size_t)hist_cap);
 
     int d = 0;
     stack[0] = (Frame){ .s = n, .ti = 0, .entered = 0 };
 
     for (;;) {
         if (cilj_postignut()) { free(stack); return 1; }
-        if (d >= max_poteza - 1) { free(stack); return 0; }
+        if (d >= hist_cap - 1) { free(stack); return 0; }
 
         Frame *fr = &stack[d];
 
@@ -207,8 +216,7 @@ static int solve_iterative(void) {
                 if (d == 0) { free(stack); return 0; }
                 d--;
                 Potez p = istorija[d];
-                tabla[m(p.na)] = 0;
-                tabla[m(p.sa)] = p.step;
+                undo_move(p.step, p.sa, p.na);
                 istorija[d] = (Potez){0,0,0};
                 continue;
             }
@@ -218,28 +226,26 @@ static int solve_iterative(void) {
         int moved = 0;
 
         while (fr->s >= 1 && !moved) {
-            int sa = 0;
-            for (int k = -(n + 1); k <= (n + 1); k++) {
-                if (k != 0 && tabla[m(k)] == fr->s) { sa = k; break; }
-            }
-
-            if (!sa) {
-                fr->s--;
-                fr->ti = 0;
-                continue;
-            }
+            int s = fr->s;
+            int sa = pos_of[s];
+            if (!sa) { fr->s--; fr->ti = 0; continue; }
 
             while (fr->ti < targets_len) {
                 int na = targets[fr->ti++];
+
                 if (na == 0 || na == sa) continue;
                 if (tabla[m(na)] != 0) continue;
-                if (!moze_stati(fr->s, na)) continue;
+                if (!moze_stati(s, na)) continue;
                 if (!put_prohodan(sa, na)) continue;
 
-                tabla[m(sa)] = 0;
-                tabla[m(na)] = fr->s;
+                if (d > 0) {
+                    Potez prev = istorija[d - 1];
+                    if (prev.step == s && prev.sa == na && prev.na == sa) continue;
+                }
 
-                istorija[d] = (Potez){fr->s, sa, na};
+                apply_move(s, sa, na);
+
+                istorija[d] = (Potez){s, sa, na};
                 istorija[d + 1] = (Potez){0,0,0};
 
                 d++;
@@ -260,48 +266,58 @@ static int solve_iterative(void) {
         if (d == 0) { free(stack); return 0; }
         d--;
         Potez p = istorija[d];
-        tabla[m(p.na)] = 0;
-        tabla[m(p.sa)] = p.step;
+        undo_move(p.step, p.sa, p.na);
         istorija[d] = (Potez){0,0,0};
     }
 }
 
-int main() {
+int main(void) {
     if (scanf("%d", &n) != 1) return 0;
     if (n < 1) return 0;
 
     tabla = (int*)calloc((size_t)(2 * n + 5), sizeof(int));
-    if (!tabla) { fprintf(stderr, "OOM\n"); return 0; }
+    pos_of = (int*)calloc((size_t)(n + 1), sizeof(int));
+    if (!tabla || !pos_of) { fprintf(stderr, "OOM\n"); return 0; }
 
-    max_poteza = 200000;
-    istorija = (Potez*)calloc((size_t)max_poteza, sizeof(Potez));
+    hist_cap = (n <= 10) ? 600000 : 1200000;
+    istorija = (Potez*)calloc((size_t)hist_cap, sizeof(Potez));
     if (!istorija) { fprintf(stderr, "OOM\n"); return 0; }
 
-    for (int i = 1; i <= n; i++) tabla[m(-i)] = i;
+    for (int i = 1; i <= n; i++) {
+        int p = -i;
+        tabla[m(p)] = i;
+        pos_of[i] = p;
+    }
 
-    hs_init(&visited, 1u << 22);
     build_targets();
 
-    int ok = solve_iterative();
+    hs_init(&visited, (n <= 10) ? (1u << 24) : (1u << 25));
+
+    int ok = solve_fast_any();
 
     if (!ok) {
         printf("Nije nadjeno\n");
         hs_free(&visited);
         free(targets);
         free(istorija);
+        free(pos_of);
         free(tabla);
         return 0;
     }
 
     memset(tabla, 0, (size_t)(2 * n + 5) * sizeof(int));
-    for (int i = 1; i <= n; i++) tabla[m(-i)] = i;
+    memset(pos_of, 0, (size_t)(n + 1) * sizeof(int));
+    for (int i = 1; i <= n; i++) {
+        int p = -i;
+        tabla[m(p)] = i;
+        pos_of[i] = p;
+    }
 
     printf("START: ");
     prikazi_stanje();
-    for (int i = 0; i < max_poteza && istorija[i].step; i++) {
+    for (int i = 0; i < hist_cap && istorija[i].step; i++) {
         Potez p = istorija[i];
-        tabla[m(p.sa)] = 0;
-        tabla[m(p.na)] = p.step;
+        apply_move(p.step, p.sa, p.na);
         printf("Pomjeri %d sa %d na %d ", p.step, p.sa, p.na);
         prikazi_stanje();
         if (cilj_postignut()) break;
@@ -310,6 +326,7 @@ int main() {
     hs_free(&visited);
     free(targets);
     free(istorija);
+    free(pos_of);
     free(tabla);
     return 0;
 }
