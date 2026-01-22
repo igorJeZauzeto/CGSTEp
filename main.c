@@ -1,80 +1,63 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define MAX_N 6
-#define MAX_POTEZA 2000
-#define VIS_SIZE 1048576
-
-int tabla[2 * MAX_N + 5];
-int global_n;
+#include <stdint.h>
 
 typedef struct { int step, sa, na; } Potez;
 
-Potez istorija[MAX_POTEZA];
+static int *tabla = NULL;
+static int n = 0;
 
-unsigned long long vis[VIS_SIZE];
-unsigned char vis_used[VIS_SIZE];
+static Potez *istorija = NULL;
+static int max_poteza = 0;
 
-int m(int p) { return p + global_n + 1; }
+static inline int m(int p) { return p + n + 1; }
 
-int valid_pos(int p) {
+static inline int valid_pos(int p) {
     if (p == 0) return 0;
-    if (p >= -global_n && p <= global_n && p != 0) return 1;
-    if (p == -(global_n + 1) || p == (global_n + 1)) return 1;
+    if (p >= -n && p <= n && p != 0) return 1;
+    if (p == -(n + 1) || p == (n + 1)) return 1;
     return 0;
 }
 
-void prikazi_stanje() {
+static void prikazi_stanje() {
     printf("L: ");
-    for (int i = -1; i >= -global_n; i--) printf("[%d]", tabla[m(i)]);
-    printf(" | G:%d D:%d | R: ", tabla[m(-(global_n+1))], tabla[m(global_n+1)]);
-    for (int i = global_n; i >= 1; i--) printf("[%d]", tabla[m(i)]);
+    for (int i = -1; i >= -n; i--) printf("[%d]", tabla[m(i)]);
+    printf(" | G:%d D:%d | R: ", tabla[m(-(n+1))], tabla[m(n+1)]);
+    for (int i = n; i >= 1; i--) printf("[%d]", tabla[m(i)]);
     printf("\n");
 }
 
-int cilj_postignut() {
-    for (int i = 1; i <= global_n; i++) if (tabla[m(i)] == 0) return 0;
+static inline int cilj_postignut() {
+    for (int i = 1; i <= n; i++) if (tabla[m(i)] == 0) return 0;
     return 1;
 }
 
-int moze_stati(int s, int p) {
-    if (p > global_n || p < -global_n) return 1;
+static inline int moze_stati(int s, int p) {
+    if (p > n || p < -n) return 1;
     int a = p < 0 ? -p : p;
     return a >= s;
 }
 
-unsigned long long hash_stanja() {
-    unsigned long long h = 1469598103934665603ULL;
-    for (int i = 0; i < 2 * global_n + 3; i++) {
-        h ^= (unsigned long long)tabla[i] + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2);
+static uint64_t hash_stanja() {
+    uint64_t h = 1469598103934665603ULL;
+    int len = 2 * n + 3;
+    for (int i = 0; i < len; i++) {
+        uint64_t x = (uint64_t)tabla[i];
+        h ^= x + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2);
     }
     return h;
 }
 
-int vis_check_add(unsigned long long h) {
-    unsigned long long idx = h & (VIS_SIZE - 1);
-    for (int t = 0; t < 64; t++) {
-        unsigned long long j = (idx + t) & (VIS_SIZE - 1);
-        if (!vis_used[j]) {
-            vis_used[j] = 1;
-            vis[j] = h;
-            return 0;
-        }
-        if (vis[j] == h) return 1;
-    }
-    return 0;
-}
-
-int put_prohodan(int sa, int na) {
+static int put_prohodan(int sa, int na) {
     if (!valid_pos(sa) || !valid_pos(na)) return 0;
     if (sa == na) return 0;
     if (sa == 0 || na == 0) return 0;
 
-    int saL = (sa >= -global_n && sa <= -1);
-    int naL = (na >= -global_n && na <= -1);
-    int saR = (sa >= 1 && sa <= global_n);
-    int naR = (na >= 1 && na <= global_n);
+    int saL = (sa >= -n && sa <= -1);
+    int naL = (na >= -n && na <= -1);
+    int saR = (sa >= 1 && sa <= n);
+    int naR = (na >= 1 && na <= n);
 
     if ((saL && naL) || (saR && naR)) {
         int a = sa < na ? sa : na;
@@ -87,85 +70,235 @@ int put_prohodan(int sa, int na) {
     }
 
     if (saL) {
-        for (int i = sa - 1; i >= -global_n; i--) {
-            if (tabla[m(i)] != 0) return 0;
-        }
+        for (int i = sa - 1; i >= -n; i--) if (tabla[m(i)] != 0) return 0;
     } else if (saR) {
-        for (int i = sa + 1; i <= global_n; i++) {
-            if (tabla[m(i)] != 0) return 0;
-        }
+        for (int i = sa + 1; i <= n; i++) if (tabla[m(i)] != 0) return 0;
     }
 
     if (naL) {
-        for (int i = -global_n; i < na; i++) {
-            if (tabla[m(i)] != 0) return 0;
-        }
+        for (int i = -n; i < na; i++) if (tabla[m(i)] != 0) return 0;
     } else if (naR) {
-        for (int i = global_n; i > na; i--) {
-            if (tabla[m(i)] != 0) return 0;
-        }
+        for (int i = n; i > na; i--) if (tabla[m(i)] != 0) return 0;
     }
 
     return 1;
 }
 
-int solve(int d) {
-    if (cilj_postignut()) return 1;
-    if (d >= MAX_POTEZA) return 0;
+typedef struct {
+    uint64_t *keys;
+    unsigned char *used;
+    size_t cap;
+    size_t size;
+} HashSet;
 
-    unsigned long long h = hash_stanja();
-    if (vis_check_add(h)) return 0;
+static void hs_init(HashSet *hs, size_t cap_pow2) {
+    hs->cap = cap_pow2;
+    hs->size = 0;
+    hs->keys = (uint64_t*)calloc(hs->cap, sizeof(uint64_t));
+    hs->used = (unsigned char*)calloc(hs->cap, 1);
+    if (!hs->keys || !hs->used) { fprintf(stderr, "OOM\n"); exit(1); }
+}
 
-    for (int s = 1; s <= global_n; s++) {
-        int sa = 0;
-        for (int k = -(global_n + 1); k <= (global_n + 1); k++) {
-            if (k != 0 && tabla[m(k)] == s) { sa = k; break; }
+static void hs_free(HashSet *hs) {
+    free(hs->keys);
+    free(hs->used);
+    hs->keys = NULL;
+    hs->used = NULL;
+    hs->cap = hs->size = 0;
+}
+
+static void hs_rehash(HashSet *hs, size_t new_cap) {
+    uint64_t *old_keys = hs->keys;
+    unsigned char *old_used = hs->used;
+    size_t old_cap = hs->cap;
+
+    hs->cap = new_cap;
+    hs->size = 0;
+    hs->keys = (uint64_t*)calloc(hs->cap, sizeof(uint64_t));
+    hs->used = (unsigned char*)calloc(hs->cap, 1);
+    if (!hs->keys || !hs->used) { fprintf(stderr, "OOM\n"); exit(1); }
+
+    for (size_t i = 0; i < old_cap; i++) {
+        if (!old_used[i]) continue;
+        uint64_t h = old_keys[i];
+        size_t idx = (size_t)(h & (hs->cap - 1));
+        for (;;) {
+            if (!hs->used[idx]) {
+                hs->used[idx] = 1;
+                hs->keys[idx] = h;
+                hs->size++;
+                break;
+            }
+            idx = (idx + 1) & (hs->cap - 1);
         }
-        if (!sa) continue;
+    }
 
-        for (int na = -(global_n + 1); na <= (global_n + 1); na++) {
-            if (na == 0 || na == sa) continue;
-            if (tabla[m(na)] != 0) continue;
-            if (!moze_stati(s, na)) continue;
-            if (!put_prohodan(sa, na)) continue;
+    free(old_keys);
+    free(old_used);
+}
 
-            tabla[m(sa)] = 0;
-            tabla[m(na)] = s;
+static int hs_has_or_add(HashSet *hs, uint64_t h) {
+    if ((hs->size + 1) * 10 >= hs->cap * 7) {
+        hs_rehash(hs, hs->cap * 2);
+    }
 
-            istorija[d] = (Potez){s, sa, na};
-            istorija[d + 1] = (Potez){0, 0, 0};
-
-            if (solve(d + 1)) return 1;
-
-            tabla[m(na)] = 0;
-            tabla[m(sa)] = s;
-            istorija[d] = (Potez){0, 0, 0};
+    size_t idx = (size_t)(h & (hs->cap - 1));
+    for (;;) {
+        if (!hs->used[idx]) {
+            hs->used[idx] = 1;
+            hs->keys[idx] = h;
+            hs->size++;
+            return 0;
         }
+        if (hs->keys[idx] == h) return 1;
+        idx = (idx + 1) & (hs->cap - 1);
+    }
+}
+
+static HashSet visited;
+
+static int *targets = NULL;
+static int targets_len = 0;
+
+static void build_targets() {
+    targets_len = 2 * n + 2;
+    targets = (int*)malloc(sizeof(int) * (size_t)targets_len);
+    if (!targets) { fprintf(stderr, "OOM\n"); exit(1); }
+
+    int t = 0;
+    targets[t++] = (n + 1);
+    for (int x = n; x >= 1; x--) targets[t++] = x;
+    targets[t++] = -(n + 1);
+    for (int x = -1; x >= -n; x--) targets[t++] = x;
+    targets_len = t;
+}
+
+static int find_pos_of(int s) {
+    for (int k = -(n + 1); k <= (n + 1); k++) {
+        if (k != 0 && tabla[m(k)] == s) return k;
     }
     return 0;
 }
 
+typedef struct {
+    int s;        // trenutna ploca koju probamo na ovom nivou
+    int ti;       // index sljedeceg cilja u targets[]
+    int entered;  // 0 ako smo tek usli na ovaj nivo (treba visited), 1 ako nastavljamo
+} Frame;
+
+static int solve_iterative(void) {
+    Frame *stack = (Frame*)calloc((size_t)max_poteza, sizeof(Frame));
+    if (!stack) { fprintf(stderr, "OOM\n"); exit(1); }
+
+    memset(istorija, 0, sizeof(Potez) * (size_t)max_poteza);
+
+    int d = 0;
+    stack[0] = (Frame){ .s = n, .ti = 0, .entered = 0 };
+
+    for (;;) {
+        if (cilj_postignut()) { free(stack); return 1; }
+        if (d >= max_poteza - 1) { free(stack); return 0; }
+
+        Frame *fr = &stack[d];
+
+        if (!fr->entered) {
+            uint64_t h = hash_stanja();
+            if (hs_has_or_add(&visited, h)) {
+                if (d == 0) { free(stack); return 0; }
+                d--;
+                Potez p = istorija[d];
+                tabla[m(p.na)] = 0;
+                tabla[m(p.sa)] = p.step;
+                istorija[d] = (Potez){0,0,0};
+                continue;
+            }
+            fr->entered = 1;
+        }
+
+        int moved = 0;
+
+        while (fr->s >= 1 && !moved) {
+            int sa = 0;
+            for (int k = -(n + 1); k <= (n + 1); k++) {
+                if (k != 0 && tabla[m(k)] == fr->s) { sa = k; break; }
+            }
+
+            if (!sa) {
+                fr->s--;
+                fr->ti = 0;
+                continue;
+            }
+
+            while (fr->ti < targets_len) {
+                int na = targets[fr->ti++];
+                if (na == 0 || na == sa) continue;
+                if (tabla[m(na)] != 0) continue;
+                if (!moze_stati(fr->s, na)) continue;
+                if (!put_prohodan(sa, na)) continue;
+
+                tabla[m(sa)] = 0;
+                tabla[m(na)] = fr->s;
+
+                istorija[d] = (Potez){fr->s, sa, na};
+                istorija[d + 1] = (Potez){0,0,0};
+
+                d++;
+                stack[d] = (Frame){ .s = n, .ti = 0, .entered = 0 };
+
+                moved = 1;
+                break;
+            }
+
+            if (!moved) {
+                fr->s--;
+                fr->ti = 0;
+            }
+        }
+
+        if (moved) continue;
+
+        if (d == 0) { free(stack); return 0; }
+        d--;
+        Potez p = istorija[d];
+        tabla[m(p.na)] = 0;
+        tabla[m(p.sa)] = p.step;
+        istorija[d] = (Potez){0,0,0};
+    }
+}
+
 int main() {
-    if (scanf("%d", &global_n) != 1) return 0;
-    if (global_n < 1 || global_n > MAX_N) return 0;
+    if (scanf("%d", &n) != 1) return 0;
+    if (n < 1) return 0;
 
-    memset(tabla, 0, sizeof(tabla));
-    memset(istorija, 0, sizeof(istorija));
-    memset(vis_used, 0, sizeof(vis_used));
+    tabla = (int*)calloc((size_t)(2 * n + 5), sizeof(int));
+    if (!tabla) { fprintf(stderr, "OOM\n"); return 0; }
 
-    for (int i = 1; i <= global_n; i++) tabla[m(-i)] = i;
+    max_poteza = 200000;
+    istorija = (Potez*)calloc((size_t)max_poteza, sizeof(Potez));
+    if (!istorija) { fprintf(stderr, "OOM\n"); return 0; }
 
-    if (!solve(0)) {
-        printf("Nema rjesenja\n");
+    for (int i = 1; i <= n; i++) tabla[m(-i)] = i;
+
+    hs_init(&visited, 1u << 22);
+    build_targets();
+
+    int ok = solve_iterative();
+
+    if (!ok) {
+        printf("Nije nadjeno\n");
+        hs_free(&visited);
+        free(targets);
+        free(istorija);
+        free(tabla);
         return 0;
     }
 
-    memset(tabla, 0, sizeof(tabla));
-    for (int i = 1; i <= global_n; i++) tabla[m(-i)] = i;
+    memset(tabla, 0, (size_t)(2 * n + 5) * sizeof(int));
+    for (int i = 1; i <= n; i++) tabla[m(-i)] = i;
 
     printf("START: ");
     prikazi_stanje();
-    for (int i = 0; i < MAX_POTEZA && istorija[i].step; i++) {
+    for (int i = 0; i < max_poteza && istorija[i].step; i++) {
         Potez p = istorija[i];
         tabla[m(p.sa)] = 0;
         tabla[m(p.na)] = p.step;
@@ -174,5 +307,9 @@ int main() {
         if (cilj_postignut()) break;
     }
 
+    hs_free(&visited);
+    free(targets);
+    free(istorija);
+    free(tabla);
     return 0;
 }

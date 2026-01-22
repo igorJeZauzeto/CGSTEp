@@ -1,6 +1,7 @@
 # depslib dependency file v1.0
-1769102669 source:c:\users\pc\desktop\2025\radim\main.c
+1769105742 source:c:\users\pc\desktop\2025\radim\main.c
 	<stdio.h>
 	<stdlib.h>
 	<string.h>
+	<stdint.h>
 
