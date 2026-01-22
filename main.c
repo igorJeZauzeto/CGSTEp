@@ -37,13 +37,38 @@ int cilj_postignut() {
 }
 
 int put_prohodan(int sa, int na) {
+    // Ako je isto polje - nema kretanja
+    if (sa == na) return 0;
+
+    // Ako su oba na istoj strani i unutar table (-n..-1 ili 1..n),
+    // provjeri samo polja IZMEĐU njih.
+    if (sa >= -global_n && sa <= global_n &&
+        na >= -global_n && na <= global_n &&
+        sa != 0 && na != 0) {
+
+        // ista strana: oba <0 ili oba >0
+        if ((sa < 0 && na < 0) || (sa > 0 && na > 0)) {
+            int a = sa, b = na;
+            if (a > b) { int t = a; a = b; b = t; }
+
+            for (int k = a + 1; k <= b - 1; k++) {
+                if (k == 0) continue;
+                if (tabla[m(k)] != 0) return 0;
+            }
+            return 1;
+        }
+    }
+
+    // Inače (prelaz na “garaže” ili preko sredine):
+    // zadrži tvoju staru logiku “do ivice” kao aproksimaciju.
+    // (Ako želiš strožije pravilo za prelaz, reci kako tačno važe pravila igre.)
     if (sa >= -global_n && sa <= global_n) {
         if (sa < 0) { for (int i = sa - 1; i >= -global_n; i--) if (tabla[m(i)] != 0) return 0; }
-        else { for (int i = sa + 1; i <= global_n; i++) if (tabla[m(i)] != 0) return 0; }
+        else        { for (int i = sa + 1; i <=  global_n; i++) if (tabla[m(i)] != 0) return 0; }
     }
     if (na >= -global_n && na <= global_n) {
         if (na < 0) { for (int i = -global_n; i > na; i--) if (tabla[m(i)] != 0) return 0; }
-        else { for (int i = global_n; i > na; i--) if (tabla[m(i)] != 0) return 0; }
+        else        { for (int i =  global_n; i > na; i--) if (tabla[m(i)] != 0) return 0; }
     }
     return 1;
 }
