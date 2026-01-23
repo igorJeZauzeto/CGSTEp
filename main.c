@@ -498,6 +498,39 @@ static Key make_goal(void) {
     return st;
 }
 
+static void print_cell(int v, int w) {
+    if (v == 0) {
+        printf("%*s", w, ".");
+    } else {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", v);
+        printf("%*s", w, buf);
+    }
+}
+
+static void print_space(int w) {
+    printf("%*s", w, "");
+}
+
+static void print_state_from_board(const int *board) {
+    int w = (n >= 10) ? 4 : 3;
+
+    for (int i = -1; i >= -n; i--) print_space(w);
+    print_cell(board[m(n+1)], w);
+    for (int i = n; i >= 1; i--) print_space(w);
+    putchar('\n');
+
+    for (int i = -1; i >= -n; i--) print_cell(board[m(i)], w);
+    printf("%*s", w, "0");
+    for (int i = n; i >= 1; i--) print_cell(board[m(i)], w);
+    putchar('\n');
+
+    for (int i = -1; i >= -n; i--) print_space(w);
+    print_cell(board[m(-(n+1))], w);
+    for (int i = n; i >= 1; i--) print_space(w);
+    putchar('\n');
+}
+
 int main(void) {
     if (scanf("%d", &n) != 1) return 0;
     if (n < 1 || n > 15) {
@@ -525,10 +558,22 @@ int main(void) {
         return 0;
     }
 
+    int len = len_tabla();
+    int *board = (int*)calloc((size_t)len, sizeof(int));
+    if (!board) { fprintf(stderr, "OOM\n"); exit(1); }
+    for (int k = 1; k <= n; k++) board[m(-k)] = k;
+    board[m(0)] = 0;
+
+    print_state_from_board(board);
+
     for (int i = 0; i < path_len; i++) {
         printf("Pomjeri %d sa %d na %d\n", path[i].step, path[i].sa, path[i].na);
+        board[m(path[i].sa)] = 0;
+        board[m(path[i].na)] = path[i].step;
+        print_state_from_board(board);
     }
 
+    free(board);
     free(path);
     free(all_pos);
     return 0;
