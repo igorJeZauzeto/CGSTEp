@@ -1,21 +1,9 @@
-// Bidirekcioni BFS (meet-in-the-middle) za CG stepenice
-// Model: mjesta -1..-n, +1..+n, plus +(n+1) (gore), -(n+1) (dolje). Nema 0.
-// Stepenica k smije stati na j ako |j|>=k (za centre uvijek moze).
-// Klizanje: isto krilo -> sve prazno izmedju; prelaz preko centra -> "cisto" do ivice i od ivice do cilja.
-// Cilj u ovoj verziji: stepenica k zavrsi na poziciji +k (tj. kompletan transfer na desno u “istom” rasporedu).
-//
-// Ako ti profesor prihvata cilj “samo sve na desnoj strani”, promijeni is_goal_state() na to pravilo.
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 
 typedef struct { int step, sa, na; } Move;
-
-/* =======================
-   Pozicije i mapiranje
-   ======================= */
 
 static int n;
 
@@ -26,11 +14,9 @@ static inline int valid_pos(int p) {
     return 0;
 }
 
-// map p in [-(n+1)..(n+1)] (0 se ne koristi) u [0..2n+2]
 static inline int m(int p) { return p + n + 1; }
 static inline int len_tabla(void) { return 2 * n + 3; }
 
-// lista svih validnih pozicija osim 0: ukupno 2n+2 komada
 static int *all_pos;
 static int all_pos_len;
 
@@ -39,19 +25,12 @@ static void build_all_pos(void) {
     all_pos = (int*)malloc(sizeof(int) * (size_t)all_pos_len);
     if (!all_pos) { fprintf(stderr, "OOM\n"); exit(1); }
     int t = 0;
-    // lijevo: -1..-n
     for (int p = -1; p >= -n; p--) all_pos[t++] = p;
-    // centri
     all_pos[t++] = (n + 1);
     all_pos[t++] = -(n + 1);
-    // desno: +1..+n
     for (int p = 1; p <= n; p++) all_pos[t++] = p;
     all_pos_len = t;
 }
-
-/* =======================
-   Pravila
-   ======================= */
 
 static inline int can_fit(int step, int p) {
     if (p == (n+1) || p == -(n+1)) return 1;
@@ -68,7 +47,6 @@ static int path_clear(int sa, int na, const int *board) {
     int saR = (sa >= 1 && sa <= n);
     int naR = (na >= 1 && na <= n);
 
-    // isto krilo
     if ((saL && naL) || (saR && naR)) {
         int a = sa < na ? sa : na;
         int b = sa < na ? na : sa;
@@ -79,14 +57,12 @@ static int path_clear(int sa, int na, const int *board) {
         return 1;
     }
 
-    // sa -> izlaz svoje strane mora biti čist
     if (saL) {
         for (int i = sa - 1; i >= -n; i--) if (board[m(i)] != 0) return 0;
     } else if (saR) {
         for (int i = sa + 1; i <= n; i++) if (board[m(i)] != 0) return 0;
     }
 
-    // ulaz u ciljno krilo do na mora biti čist
     if (naL) {
         for (int i = -n; i < na; i++) if (board[m(i)] != 0) return 0;
     } else if (naR) {
@@ -95,11 +71,6 @@ static int path_clear(int sa, int na, const int *board) {
 
     return 1;
 }
-
-/* =======================
-   Pakovanje stanja u 2x64
-   (4 bita po polju, n<=15 staje)
-   ======================= */
 
 typedef struct { uint64_t lo, hi; } Key;
 
@@ -118,7 +89,9 @@ static inline uint64_t key_hash(Key k) {
 
 static Key pack_board(const int *board) {
     int len = len_tabla();
-    Key k = {0,0};
+    Key k;
+    k.lo = 0;
+    k.hi = 0;
     int bit = 0;
     for (int i = 0; i < len; i++) {
         uint64_t v = (uint64_t)(board[i] & 0xF);
@@ -139,34 +112,22 @@ static void unpack_board(Key k, int *board) {
         board[i] = (int)v;
         bit += 4;
     }
-    // sigurnost: "0 pozicija" (m(0)) se ne koristi
     board[m(0)] = 0;
 }
 
-/* =======================
-   Cilj (unique): k na +k
-   ======================= */
-
 static int is_goal_state(Key k) {
     int len = len_tabla();
-    int board_stack_len = len;
-    int *board = (int*)alloca(sizeof(int) * (size_t)board_stack_len);
+    int *board = (int*)alloca(sizeof(int) * (size_t)len);
     unpack_board(k, board);
-
     for (int step = 1; step <= n; step++) {
         if (board[m(step)] != step) return 0;
     }
-    // sve ostalo može biti 0 (biće)
     return 1;
 }
 
-/* =======================
-   Hash mapa Key -> index (open addressing)
-   ======================= */
-
 typedef struct {
     Key *keys;
-    int *vals;               // index u node array
+    int *vals;
     unsigned char *used;
     size_t cap, size;
 } KeyMap;
@@ -242,20 +203,15 @@ static void km_put(KeyMap *mp, Key k, int val) {
             mp->size++;
             return;
         }
-        // već postoji: ne diraj (mi u BFS-u ne ažuriramo)
         if (mp->keys[idx].lo == k.lo && mp->keys[idx].hi == k.hi) return;
         idx = (idx + 1) & (mp->cap - 1);
     }
 }
 
-/* =======================
-   Node storage (parent + move)
-   ======================= */
-
 typedef struct {
     Key state;
-    int parent;     // -1 za root
-    Move mv;        // potez koji vodi od parent -> ovo stanje
+    int parent;
+    Move mv;
 } Node;
 
 typedef struct {
@@ -283,10 +239,6 @@ static int nv_push(NodeVec *v, Node nd) {
 }
 static void nv_free(NodeVec *v) { free(v->a); v->a=NULL; v->cap=v->size=0; }
 
-/* =======================
-   Generator poteza: iteriraj po prazninama (manje grananje)
-   ======================= */
-
 static int gen_moves(Key st, Move *out, int out_cap) {
     int len = len_tabla();
     int *board = (int*)alloca(sizeof(int) * (size_t)len);
@@ -300,7 +252,6 @@ static int gen_moves(Key st, Move *out, int out_cap) {
         if (v > 0 && v <= n) pos_of[v] = p;
     }
 
-    // sakupi prazne pozicije
     int empties_len = 0;
     int *empties = (int*)alloca(sizeof(int) * (size_t)all_pos_len);
     for (int i = 0; i < all_pos_len; i++) {
@@ -310,7 +261,6 @@ static int gen_moves(Key st, Move *out, int out_cap) {
 
     int cnt = 0;
 
-    // za svaku prazninu, probaj stepenice (veće prvo obično pomaže)
     for (int ei = 0; ei < empties_len; ei++) {
         int na = empties[ei];
 
@@ -321,10 +271,19 @@ static int gen_moves(Key st, Move *out, int out_cap) {
             if (!can_fit(s, na)) continue;
             if (!path_clear(sa, na, board)) continue;
 
+            if (sa == s && !(na == (n+1) || na == -(n+1))) continue;
+
+            if (sa < 0 && na < 0) {
+                if (na <= sa) continue;
+            } else if (sa > 0 && na > 0) {
+                int dist_before = sa - s; if (dist_before < 0) dist_before = -dist_before;
+                int dist_after  = na - s; if (dist_after  < 0) dist_after  = -dist_after;
+                if (dist_after >= dist_before) continue;
+            }
+
             if (cnt < out_cap) {
                 out[cnt++] = (Move){ .step = s, .sa = sa, .na = na };
             } else {
-                // ako pređe cap, samo prekini; u praksi out_cap je dovoljno velik
                 return cnt;
             }
         }
@@ -347,12 +306,7 @@ static inline Move invert_move(Move mv) {
     return r;
 }
 
-/* =======================
-   Rekonstrukcija i ispis
-   ======================= */
-
 static Move *reconstruct_path(NodeVec *F, int meet_f, NodeVec *B, int meet_b, int *out_len) {
-    // forward put: rootF -> meet_f
     int f_len = 0, f_cap = 1024;
     Move *f_moves = (Move*)malloc(sizeof(Move) * (size_t)f_cap);
     if (!f_moves) { fprintf(stderr, "OOM\n"); exit(1); }
@@ -365,15 +319,12 @@ static Move *reconstruct_path(NodeVec *F, int meet_f, NodeVec *B, int meet_b, in
         }
         f_moves[f_len++] = F->a[v].mv;
     }
-    // trenutno su unazad (meet->root), okreni
     for (int i = 0; i < f_len / 2; i++) {
         Move tmp = f_moves[i];
         f_moves[i] = f_moves[f_len - 1 - i];
         f_moves[f_len - 1 - i] = tmp;
     }
 
-    // backward put: rootB(goal) -> meet_b, ali to je u obrnutom smjeru u odnosu na rješenje.
-    // Da bi dobio meet -> goal, ideš od meet_b do rootB i invertuješ poteze.
     int b_len = 0, b_cap = 1024;
     Move *b_moves = (Move*)malloc(sizeof(Move) * (size_t)b_cap);
     if (!b_moves) { fprintf(stderr, "OOM\n"); exit(1); }
@@ -384,11 +335,8 @@ static Move *reconstruct_path(NodeVec *F, int meet_f, NodeVec *B, int meet_b, in
             b_moves = (Move*)realloc(b_moves, sizeof(Move) * (size_t)b_cap);
             if (!b_moves) { fprintf(stderr, "OOM\n"); exit(1); }
         }
-        // potez je parent -> v u backward pretrazi, za rješenje treba invert kad idemo v -> parent
         b_moves[b_len++] = invert_move(B->a[v].mv);
     }
-    // b_moves su već redom meet -> ... -> goal (jer smo išli od meet ka rootB)
-    // super.
 
     int total = f_len + b_len;
     Move *path = (Move*)malloc(sizeof(Move) * (size_t)total);
@@ -403,10 +351,6 @@ static Move *reconstruct_path(NodeVec *F, int meet_f, NodeVec *B, int meet_b, in
     *out_len = total;
     return path;
 }
-
-/* =======================
-   Bidirekcioni BFS
-   ======================= */
 
 typedef struct {
     int *q;
@@ -424,7 +368,6 @@ static void q_free(Queue *q) { free(q->q); q->q=NULL; q->cap=q->head=q->tail=0; 
 static int q_size(const Queue *q) { return q->tail - q->head; }
 static void q_push(Queue *q, int v) {
     if (q->tail >= q->cap) {
-        // kompaktuj ako ima mjesta na početku
         if (q->head > 0) {
             int sz = q->tail - q->head;
             memmove(q->q, q->q + q->head, sizeof(int) * (size_t)sz);
@@ -447,15 +390,14 @@ static int bidir_bfs(Key start, Key goal, Move **out_path, int *out_path_len) {
     KeyMap MF, MB;
     Queue QF, QB;
 
-    nv_init(&F, 1<<20);
-    nv_init(&B, 1<<20);
+    nv_init(&F, 1<<21);
+    nv_init(&B, 1<<21);
 
-    // hash kapaciteti (power of 2). za n=10 ovo je ok start; po potrebi raste.
-    km_init(&MF, 1u<<22);
-    km_init(&MB, 1u<<22);
+    km_init(&MF, 1u<<23);
+    km_init(&MB, 1u<<23);
 
-    q_init(&QF, 1<<20);
-    q_init(&QB, 1<<20);
+    q_init(&QF, 1<<21);
+    q_init(&QB, 1<<21);
 
     int rootF = nv_push(&F, (Node){ .state=start, .parent=-1, .mv=(Move){0,0,0} });
     int rootB = nv_push(&B, (Node){ .state=goal,  .parent=-1, .mv=(Move){0,0,0} });
@@ -466,8 +408,6 @@ static int bidir_bfs(Key start, Key goal, Move **out_path, int *out_path_len) {
     q_push(&QF, rootF);
     q_push(&QB, rootB);
 
-    // mali buffer za poteze
-    // (povećaj ako želiš; realno grananje ovdje nije ogromno kad iteriraš po prazninama)
     Move moves[512];
 
     for (;;) {
@@ -536,10 +476,6 @@ static int bidir_bfs(Key start, Key goal, Move **out_path, int *out_path_len) {
     return 0;
 }
 
-/* =======================
-   Pomoć: napravi start i goal
-   ======================= */
-
 static Key make_start(void) {
     int len = len_tabla();
     int *board = (int*)calloc((size_t)len, sizeof(int));
@@ -555,21 +491,17 @@ static Key make_goal(void) {
     int len = len_tabla();
     int *board = (int*)calloc((size_t)len, sizeof(int));
     if (!board) { fprintf(stderr, "OOM\n"); exit(1); }
-    for (int k = 1; k <= n; k++) board[m(k)] = k; // cilj: k na +k
+    for (int k = 1; k <= n; k++) board[m(k)] = k;
     board[m(0)] = 0;
     Key st = pack_board(board);
     free(board);
     return st;
 }
 
-/* =======================
-   main
-   ======================= */
-
 int main(void) {
     if (scanf("%d", &n) != 1) return 0;
     if (n < 1 || n > 15) {
-        fprintf(stderr, "n mora biti u [1..15] (pakovanje 4 bita po polju)\n");
+        fprintf(stderr, "n mora biti u [1..15]\n");
         return 0;
     }
 
@@ -578,9 +510,7 @@ int main(void) {
     Key start = make_start();
     Key goal  = make_goal();
 
-    // sanity: ako je start već goal
     if (is_goal_state(start)) {
-        printf("START je vec CILJ\n");
         free(all_pos);
         return 0;
     }
@@ -595,7 +525,6 @@ int main(void) {
         return 0;
     }
 
-    // ispis poteza
     for (int i = 0; i < path_len; i++) {
         printf("Pomjeri %d sa %d na %d\n", path[i].step, path[i].sa, path[i].na);
     }
